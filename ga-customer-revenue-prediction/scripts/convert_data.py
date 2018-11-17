@@ -1,3 +1,4 @@
+
 import gc
 import os
 import numpy as np
@@ -5,34 +6,9 @@ import pandas as pd
 from pandas.io.json import json_normalize
 import json
 import time
+from tqdm import tqdm
 from ast import literal_eval
 
-
-
-def load_df(file_name = 'train_v2.csv', nrows = None):
-    """Read csv and convert json columns."""
-
-
-    JSON_COLUMNS = ['device', 'geoNetwork', 'totals', 'trafficSource']
-    df = pd.read_csv('../input/{}'.format(file_name),
-                     parse_dates=['date'],
-                     converters={column: json.loads for column in JSON_COLUMNS}, 
-                     dtype={'fullVisitorId': 'str'}, nrows=nrows)
-    
-    for column in JSON_COLUMNS:
-        column_as_df = json_normalize(df[column])
-        column_as_df.columns = [f"{column}_{subcolumn}" for subcolumn in column_as_df.columns]
-        df = df.drop(column, axis=1).merge(column_as_df, right_index=True, left_index=True)
-        
-    # Normalize customDimensions
-    df['customDimensions']=df['customDimensions'].apply(literal_eval)
-    df['customDimensions']=df['customDimensions'].str[0]
-    df['customDimensions']=df['customDimensions'].apply(lambda x: {'index':np.NaN,'value':np.NaN} if pd.isnull(x) else x)
-
-    column_as_df = json_normalize(df['customDimensions'])
-    column_as_df.columns = [f"customDimensions_{subcolumn}" for subcolumn in column_as_df.columns]
-    df = df.drop('customDimensions', axis=1).merge(column_as_df, right_index=True, left_index=True)
-    return df
 
 
 def to_na(df):
@@ -101,44 +77,83 @@ def weird_na(df):
     df = df.replace(cols_to_replace,'NA')
     return df
 
-def pipeline(nrows=None):
-    print('Load data')
-    df_train = load_df('train_v2.csv',nrows)
-    df_test = load_df('test_v2.csv',nrows)
-    
-    print('Raw data')
-    print(f'Train {df_train.shape}')
-    print(f'Test {df_test.shape}')
-    
-    print('Handle Na values')
-    df_train = weird_na(df_train)
-    df_test  = weird_na(df_test)
-    
-    df_train = to_na(df_train)
-    df_test  = to_na(df_test)
-    
-    print('Encode date data')
-    df_train = encode_date(df_train)
-    df_test  = encode_date(df_test)
-    
-    print('Drop constant columns')
+def del_const(df):
     const_col = []
-    for col in df_train.columns:
-        if df_train[col].nunique() == 1 and df_train[col].isnull().sum()==0 :
+    for col in df.columns:
+        if df[col].nunique() == 1 and df[col].isnull().sum()==0 :
             const_col.append(col)
             
-    df_train.drop(const_col,axis=1,inplace=True)
-    df_test.drop(const_col,axis=1,inplace=True)
-    
-    print('Ouput data')
-    print(f'Train {df_train.shape}')
-    print(f'Test  {df_test.shape}')
-    
-    return df_train,df_test
+    df.drop(const_col,axis=1,inplace=True)
+    return df, const_col
     
     
+def json_it(df):
+    JSON_COLUMNS = ['device', 'geoNetwork', 'totals', 'trafficSource']
     
-df_train,df_test = pipeline()
+    for column in JSON_COLUMNS:
+        column_as_df = json_normalize(df[column]) 
+        column_as_df.columns = [f"{column}_{subcolumn}" for subcolumn in column_as_df.columns] 
+        df = df.drop(column, axis=1).merge(column_as_df, right_index=True, left_index=True)
+            
+     # Normalize customDimensions
+    df['customDimensions']=df['customDimensions'].apply(literal_eval)
+    df['customDimensions']=df['customDimensions'].str[0]
+    df['customDimensions']=df['customDimensions'].apply(lambda x: {'index':np.NaN,'value':np.NaN} if pd.isnull(x) else x)
 
-df_train.to_hdf('train_flatten.h5','data')
-df_test.to_hdf('test_flatten.h5','data')
+    column_as_df = json_normalize(df['customDimensions'])
+    column_as_df.columns = [f"customDimensions_{subcolumn}" for subcolumn in column_as_df.columns]
+    df = df.drop('customDimensions', axis=1).merge(column_as_df, right_index=True, left_index=True)
+    
+    return df
+
+def convert_it(df):
+    # convert weird string to na
+    df = weird_na(df)
+    
+    # Convert columns to Na on it own type
+    df = to_na(df)
+    
+    # create new columsn with data
+    df_train = encode_date(df)
+    
+    return df
+    
+def loadit(csv_path,name):
+    CONST_COLLUMNS = ['socialEngagementType','device_browserSize',
+         'device_browserVersion','device_flashVersion',
+         'device_language','device_mobileDeviceBranding',
+         'device_mobileDeviceInfo','device_mobileDeviceMarketingName',
+         'device_mobileDeviceModel','device_mobileInputSelector',
+         'device_operatingSystemVersion','device_screenColors',
+         'device_screenResolution','geoNetwork_cityId',
+         'geoNetwork_latitude','geoNetwork_longitude',
+         'geoNetwork_networkLocation',
+         'trafficSource_adwordsClickInfo.criteriaParameters',]
+    JSON_COLUMNS = ['device', 'geoNetwork', 'totals', 'trafficSource']
+    
+    dfs = pd.read_csv(csv_path, sep=',',
+                      parse_dates=['date'],
+                     converters={column: json.loads for column in JSON_COLUMNS}, 
+                     dtype={'fullVisitorId': 'str'}, # Important!!
+                    chunksize = 200000)
+    
+    for idx,df in enumerate(dfs):
+        print(idx)
+        df.reset_index(drop = True,inplace = True)
+        df = json_it(df)
+        df = convert_it(df)
+        df.drop(CONST_COLLUMNS,axis=1,inplace=True)
+        # Heavy as hell this column
+        df.drop('hits',axis=1,inplace=True)
+        df.to_pickle(f'{name}_{idx}.pkl')
+        
+        del df
+        gc.collect()
+    print('Done')
+  
+  
+loadit('../input/train_v2.csv','train')
+
+
+loadit('../input/test_v2.csv','test')
+
