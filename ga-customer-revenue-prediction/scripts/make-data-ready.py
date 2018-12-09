@@ -1,4 +1,3 @@
-
 import gc
 import os
 import numpy as np
@@ -9,18 +8,14 @@ import time
 from tqdm import tqdm
 from ast import literal_eval
 
-
-
 def to_na(df):
     # Each type of columns that need to replace with the right na values
     to_NA_cols = ['trafficSource_adContent','trafficSource_adwordsClickInfo.adNetworkType',
                 'trafficSource_adwordsClickInfo.slot','trafficSource_adwordsClickInfo.gclId',
-                'trafficSource_keyword','trafficSource_referralPath']
+                'trafficSource_keyword','trafficSource_referralPath','customDimensions_value']
 
     to_0_cols = ['totals_transactionRevenue','trafficSource_adwordsClickInfo.page','totals_sessionQualityDim','totals_bounces',
-                 'totals_timeOnSite','totals_newVisits','totals_pageviews']
-    to_0_cols_test = ['trafficSource_adwordsClickInfo.page','totals_sessionQualityDim','totals_bounces',
-                 'totals_timeOnSite','totals_newVisits','totals_pageviews']
+                 'totals_timeOnSite','totals_newVisits','totals_pageviews','customDimensions_index','totals_transactions','totals_totalTransactionRevenue']
 
     to_true_cols = ['trafficSource_adwordsClickInfo.isVideoAd']
     to_false_cols = ['trafficSource_isTrueDirect']
@@ -33,20 +28,18 @@ def to_na(df):
     
     return df
     
-    
 def encode_date(df):
     fld = pd.to_datetime(df['date'], infer_datetime_format=True)
     
     attrs = ['Year', 'Month', 'Week', 'Day', 'Dayofweek', 'Dayofyear',
         'Is_month_end', 'Is_month_start', 'Is_quarter_end', 
-        'Is_quarter_start', 'Is_year_end', 'Is_year_start']
+        'Is_quarter_start', 'Is_year_end', 'Is_year_start','Hour']
         
     for attr in attrs:
         df['Date_'+attr] = getattr(fld.dt,attr.lower())
         
     return df
 
-    
 def weird_na(df):
     cols_to_replace = {
         'socialEngagementType' : 'Not Socially Engaged',
@@ -72,7 +65,9 @@ def weird_na(df):
         'geoNetwork_region' : 'not available in demo dataset',
         'trafficSource_adwordsClickInfo.criteriaParameters' : 'not available in demo dataset',
         'trafficSource_campaign' : '(not set)', 
-        'trafficSource_keyword' : '(not provided)'
+        'trafficSource_keyword' : '(not provided)',
+        'networkDomain': '(not set)', 
+        'city': '(not set)', 
     }
     df = df.replace(cols_to_replace,'NA')
     return df
@@ -85,7 +80,6 @@ def del_const(df):
             
     df.drop(const_col,axis=1,inplace=True)
     return df, const_col
-    
     
 def json_it(df):
     JSON_COLUMNS = ['device', 'geoNetwork', 'totals', 'trafficSource']
@@ -118,7 +112,24 @@ def convert_it(df):
     
     return df
     
-def loadit(csv_path,name):
+def fix_type(df):
+    try:
+        df.drop('trafficSource_campaignCode',axis=1,inplace=True)
+    except:
+        pass
+    # Fill na and rename the Revenue column
+    df['totals_transactionRevenue'] = df['totals_transactionRevenue'].fillna(0).astype(float)
+
+    to_int = ['totals_bounces','totals_newVisits','totals_pageviews',
+            'customDimensions_index','totals_hits','totals_sessionQualityDim',
+            'totals_visits','totals_timeOnSite','trafficSource_adwordsClickInfo.page',
+            'totals_transactions','totals_totalTransactionRevenue']
+    for col in to_int :
+        df[col] = df[col].astype(int)
+
+    return df
+    
+def load_it(csv_path,name):
     CONST_COLLUMNS = ['socialEngagementType','device_browserSize',
          'device_browserVersion','device_flashVersion',
          'device_language','device_mobileDeviceBranding',
@@ -132,9 +143,9 @@ def loadit(csv_path,name):
     JSON_COLUMNS = ['device', 'geoNetwork', 'totals', 'trafficSource']
     
     dfs = pd.read_csv(csv_path, sep=',',
-                      parse_dates=['date'],
-                     converters={column: json.loads for column in JSON_COLUMNS}, 
-                     dtype={'fullVisitorId': 'str'}, # Important!!
+                    parse_dates=['date'],
+                    converters={column: json.loads for column in JSON_COLUMNS}, 
+                    dtype={'fullVisitorId': 'str'}, # Important!!
                     chunksize = 200000)
     
     for idx,df in enumerate(dfs):
@@ -145,6 +156,7 @@ def loadit(csv_path,name):
         df.drop(CONST_COLLUMNS,axis=1,inplace=True)
         # Heavy as hell this column
         df.drop('hits',axis=1,inplace=True)
+        df = fix_type(df)
         df.to_pickle(f'{name}_{idx}.pkl')
         
         del df
@@ -152,8 +164,6 @@ def loadit(csv_path,name):
     print('Done')
   
   
-loadit('../input/train_v2.csv','train')
+load_it('../input/train_v2.csv','train')
 
-
-loadit('../input/test_v2.csv','test')
-
+load_it('../input/test_v2.csv','test')
